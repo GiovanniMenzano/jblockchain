@@ -34,10 +34,12 @@ public class BlockchainServiceImpl implements IBlockchainService {
 		this.objectMapper = objectMapper;
 	}
 
+	private static final LocalDateTime GENESIS_TIMESTAMP = LocalDateTime.of(2025, 1, 1, 0, 0, 0);
+
 	@PostConstruct
 	public void init() {
 		log.info("Initializing blockchain with genesis block (difficulty={})", miningDifficulty);
-		Block genesis = new Block(0, LocalDateTime.now(), "Genesis Block", "0");
+		Block genesis = new Block(0, GENESIS_TIMESTAMP, "Genesis Block", "0");
 		genesis.mine(miningDifficulty);
 		chain.add(genesis);
 		log.info("Genesis block created: {}", genesis.getHash());

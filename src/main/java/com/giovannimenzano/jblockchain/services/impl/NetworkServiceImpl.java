@@ -1,6 +1,7 @@
 package com.giovannimenzano.jblockchain.services.impl;
 
 import com.giovannimenzano.jblockchain.dto.response.BlockchainStatus;
+import com.giovannimenzano.jblockchain.dto.response.GenericResponse;
 import com.giovannimenzano.jblockchain.entities.Block;
 import com.giovannimenzano.jblockchain.exceptions.BlockchainException;
 import com.giovannimenzano.jblockchain.services.IBlockchainService;
@@ -17,6 +18,7 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -34,7 +36,7 @@ import java.util.stream.Collectors;
 public class NetworkServiceImpl implements INetworkService {
 
 	/**
-	 * Maximum number of peers to contact per broadcast. 0 = broadcast to all (legacy mode).
+	 * Maximum number of peers to contact per broadcast. 0 = broadcast to all.
 	 */
 	@Value("${blockchain.network.max-broadcast-peers:0}")
 	private int maxBroadcastPeers;
@@ -50,6 +52,12 @@ public class NetworkServiceImpl implements INetworkService {
 
 	@Value("${api.network.broadcast:/broadcast}")
 	private String broadcastEndpoint;
+
+	@Value("${server.port:8091}")
+	private int serverPort;
+
+	@Value("${server.servlet.context-path:}")
+	private String contextPath;
 
 	private final Set<String> nodes = new HashSet<>();
 
@@ -95,11 +103,12 @@ public class NetworkServiceImpl implements INetworkService {
 			return;
 		}
 
+		String selfUrl = getLocalNodeUrl();
 		seenBlockHashes.add(block.getHash());
-		Set<String> targets = selectBroadcastTargets(nodes, null);
+		Set<String> targets = selectBroadcastTargets(nodes, selfUrl);
 		log.info("Broadcasting block {} to {}/{} peers", block.getIndex(), targets.size(), nodes.size());
 
-		targets.forEach(nodeUrl -> sendBroadcast(block, nodeUrl, null));
+		targets.forEach(nodeUrl -> sendBroadcast(block, nodeUrl, selfUrl));
 	}
 
 	/**
@@ -129,9 +138,20 @@ public class NetworkServiceImpl implements INetworkService {
 	 * Fetches only the chain status (length + last hash) from a peer - lightweight call.
 	 */
 	@Override
+	@SuppressWarnings("unchecked")
 	public BlockchainStatus getPeerStatus(String peerUrl) {
 		String statusUrl = peerUrl + blockchainBasePath + statusEndpoint;
-		return restTemplate.getForObject(statusUrl, BlockchainStatus.class);
+		Map<String, Object> response = restTemplate.getForObject(statusUrl, Map.class);
+		if (response == null || response.get("data") == null) {
+			return null;
+		}
+		Map<String, Object> data = (Map<String, Object>) response.get("data");
+		BlockchainStatus status = new BlockchainStatus();
+		status.setChainLength((Integer) data.get("chainLength"));
+		status.setValid((Boolean) data.get("valid"));
+		status.setLastBlockHash((String) data.get("lastBlockHash"));
+		status.setPendingMessages((Integer) data.get("pendingMessages"));
+		return status;
 	}
 
 	/**
@@ -171,13 +191,14 @@ public class NetworkServiceImpl implements INetworkService {
 		log.info("Consensus: peer {} has longer chain (length={}). Downloading full chain.", bestPeerUrl, bestLength);
 		try {
 			String chainUrl = bestPeerUrl + blockchainBasePath;
-			ResponseEntity<List<Block>> response = restTemplate.exchange(
-					chainUrl,
-					HttpMethod.GET,
-					null,
-					new ParameterizedTypeReference<List<Block>>() {}
+			ResponseEntity<GenericResponse<List<Block>>> response = restTemplate.exchange(
+				chainUrl,
+				HttpMethod.GET,
+				null,
+				new ParameterizedTypeReference<GenericResponse<List<Block>>>() {}
 			);
-			List<Block> peerChain = response.getBody();
+			GenericResponse<List<Block>> body = response.getBody();
+			List<Block> peerChain = body != null ? body.getData() : null;
 			if (peerChain != null && blockchainService.replaceChain(peerChain)) {
 				log.info("Chain replaced with longer valid chain from {}", bestPeerUrl);
 				return true;
@@ -195,8 +216,8 @@ public class NetworkServiceImpl implements INetworkService {
 	 */
 	private Set<String> selectBroadcastTargets(Set<String> allNodes, String excludeUrl) {
 		List<String> candidates = allNodes.stream()
-				.filter(url -> !url.equals(excludeUrl))
-				.collect(Collectors.toList());
+			.filter(url -> !url.equals(excludeUrl))
+			.collect(Collectors.toList());
 
 		if (maxBroadcastPeers <= 0 || candidates.size() <= maxBroadcastPeers) {
 			return new HashSet<>(candidates);
@@ -217,5 +238,13 @@ public class NetworkServiceImpl implements INetworkService {
 		} catch (RestClientException e) {
 			log.warn("Failed to broadcast block {} to {}: {}", block.getIndex(), targetUrl, e.getMessage());
 		}
+	}
+
+	/**
+	 * Builds the local node URL from server.port and context-path.
+	 * Used as the sender identifier in gossip broadcasts.
+	 */
+	private String getLocalNodeUrl() {
+		return "http://localhost:" + serverPort + contextPath;
 	}
 }
