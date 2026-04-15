@@ -27,14 +27,22 @@ A demo blockchain built with Java and Spring Boot, designed for learning purpose
 
 ```
 src/main/java/com/giovannimenzano/jblockchain/
-├── config/         WebConfig.java          (CORS + RestTemplate)
-├── controllers/    BlockchainController    (chain endpoints)
-│                   NetworkController       (P2P network endpoints)
-├── dto/            Message, MessageType, MineResponse, BlockchainStatus, NodeInfo
+├── config/         WebConfig.java               (RestTemplate + timeouts)
+├── controller/     IBlockchainController        (Swagger-annotated interfaces)
+│                   INetworkController
+│   impl/           BlockchainController         (implementations)
+│                   NetworkController
+├── dto/
+│   request/        Message.java, NodeInfo.java
+│   response/       GenericResponse.java, BlockchainStatus.java, MineResponse.java
 ├── entities/       Block.java
-├── exceptions/     BlockchainException, GlobalExceptionHandler
-└── services/       BlockchainService       (core chain logic)
-                    NetworkService          (P2P communication)
+├── exceptions/     BlockchainException.java, NotFoundException.java
+├── interceptor/    GlobalExceptionHandler.java
+├── scheduler/      ChainSyncScheduler.java      (startup sync + periodic consensus)
+└── services/       IBlockchainService           (interfaces)
+│                   INetworkService
+│   impl/           BlockchainServiceImpl        (PoW, validation, consensus)
+│                   NetworkServiceImpl           (P2P gossip, bootstrap, broadcast)
 ```
 
 ## Getting Started
@@ -46,7 +54,7 @@ src/main/java/com/giovannimenzano/jblockchain/
 
 ### Run a single node
 
-```bash
+```powershell
 mvn spring-boot:run
 ```
 
@@ -54,38 +62,65 @@ The node starts on port `8091` with context path `/jblockchain`.
 
 Swagger UI: **http://localhost:8091/jblockchain/swagger-ui/index.html**
 
-### Run two nodes (P2P demo)
+### Run N nodes (P2P network)
 
-Open two separate terminals in the project root.
+Each node is started in a separate PowerShell terminal. The **first node** is the seed and has no peers. Every subsequent node points to the seed via `blockchain.network.seed-nodes` and is automatically registered, no manual setup needed.
 
-**Terminal 1 - Node 1 (port 8091):**
-```bash
-mvn spring-boot:run
-```
+**General pattern:**
 
-**Terminal 2 - Node 2 (port 8092):**
-
-*Linux/Mac (Bash):*
-```bash
-mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8092 --blockchain.node.name=Node-2"
-```
-
-*Windows (PowerShell):*
 ```powershell
-mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8092 --blockchain.node.name=Node-2"
+# First node (seed) - no seed-nodes argument needed
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=<PORT> --blockchain.node.name=<NAME>"
+
+# Every additional node - points to Node-1 as seed
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=<PORT> --blockchain.node.name=<NAME> --blockchain.network.seed-nodes=http://localhost:<SEED_PORT>/jblockchain"
 ```
+
+**Example with 3 nodes** (open three terminals in the project root):
+
+*Terminal 1 — Node-1 (seed):*
+```powershell
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8091 --blockchain.node.name=Node-1"
+```
+
+*Terminal 2 — Node-2:*
+```powershell
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8092 --blockchain.node.name=Node-2 --blockchain.network.seed-nodes=http://localhost:8091/jblockchain"
+```
+
+*Terminal 3 — Node-3:*
+```powershell
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8093 --blockchain.node.name=Node-3 --blockchain.network.seed-nodes=http://localhost:8091/jblockchain"
+```
+
+> Always start **Node-1 first** and wait for it to be ready before starting the others.
+> Each additional node will self-register with the seed and discover all other peers automatically at startup.
 
 ### Configuration
 
 Edit `src/main/resources/application.properties`:
 
 ```properties
+# Server
 server.port=8091
-blockchain.mining.difficulty=4   # number of leading zeros required in a valid hash
-blockchain.node.name=Node-1
-```
+server.servlet.context-path=/jblockchain
 
-Higher difficulty = more hashing iterations = slower mining. Recommended values: `2` (instant) to `5` (several seconds).
+# Mining difficulty: number of leading zeros required in a valid block hash.
+# Recommended: 2 (instant) to 5 (several seconds per block)
+blockchain.mining.difficulty=4
+
+# Node identity
+blockchain.node.name=Node-1
+
+# Public base URL of this node (scheme + host only).
+# Override with the public hostname when deploying on a remote server.
+# REQUIRED - the application will not start if left blank.
+blockchain.node.url=http://localhost
+
+# Comma-separated seed node URLs for auto-registration at startup.
+# Leave empty for the first (bootstrap) node in the network.
+blockchain.network.seed-nodes=
+```
 
 ## API Reference
 
@@ -130,23 +165,37 @@ Supported types: `TEXT`, `JSON`, `BINARY` (Base64-encoded).
 
 ## Live P2P Test Walkthrough (using Swagger UI)
 
-1. **Start both nodes** (see above).
+### Setup
 
-2. **Open two browser tabs:**
-   - Node 1: `http://localhost:8091/jblockchain/swagger-ui/index.html`
-   - Node 2: `http://localhost:8092/jblockchain/swagger-ui/index.html`
+1. **Start 3 nodes** as shown in the [Run N nodes](#run-n-nodes-p2p-network) section above.
+2. **Open three browser tabs:**
+   - Node-1: `http://localhost:8091/jblockchain/swagger-ui/index.html`
+   - Node-2: `http://localhost:8092/jblockchain/swagger-ui/index.html`
+   - Node-3: `http://localhost:8093/jblockchain/swagger-ui/index.html`
 
-3. **Register Node 2 as a peer of Node 1** - on Node 1's Swagger, call `POST /api/network/nodes` with:
+### Phase 1 — Verify automatic bootstrap
+
+Check the logs of Node-2 and Node-3: both should show `[Bootstrap] Registered self` and `Bootstrap complete` before the first sync. No manual registration is needed.
+
+On Node-1's Swagger, call `GET /api/network/nodes` — it should already list Node-2 and Node-3.
+
+### Phase 2 — Gossip broadcast
+
+1. On **Node-1** call `POST /api/chain/messages` with any payload:
    ```json
-   { "url": "http://localhost:8092/jblockchain" }
+   { "type": "TEXT", "content": "Hello from Node-1!" }
    ```
+2. On **Node-1** call `POST /api/chain/mine`.
+3. Check the logs: Node-2 and Node-3 should receive the broadcast and synchronize automatically.
+4. Verify with `GET /api/chain` on any node — all three should show 2 blocks.
 
-4. **Submit a message to Node 1** - call `POST /api/chain/messages` with any payload.
+### Phase 3 — Offline recovery
 
-5. **Mine the block on Node 1** - call `POST /api/chain/mine`.
-   Watch Terminal 2: Node 2 will receive the broadcast and synchronize automatically.
-
-6. **Verify Node 2 has the new block** - call `GET /api/chain` on Node 2's Swagger.
+1. Stop Node-3 (`Ctrl+C` in Terminal 3).
+2. Mine one or two more blocks on Node-1.
+3. Restart Node-3 with the same command.
+4. Check its log: it will bootstrap, discover peers, and pull the missing blocks automatically.
+5. Verify with `GET /api/chain` on Node-3 — the chain will be up to date.
 
 ## How It Works
 

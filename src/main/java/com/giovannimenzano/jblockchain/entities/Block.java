@@ -1,5 +1,10 @@
 ﻿package com.giovannimenzano.jblockchain.entities;
 
+import com.fasterxml.jackson.annotation.JsonGetter;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonRawValue;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -15,10 +20,45 @@ public class Block {
 
 	private int index;
 	private LocalDateTime timestamp;
+
+	/**
+	 * Block payload stored as a JSON string internally (for deterministic hash computation).
+	 * Jackson serialization/deserialization is handled by custom getDataJson()/setDataJson()
+	 * to avoid double-escaping of JSON content in the REST API output.
+	 */
+	@JsonIgnore
 	private String data;
+
 	private int nonce;
 	private String previousHash;
 	private String hash;
+
+	/**
+	 * Outputs the data field as raw JSON when it contains a JSON structure (mined blocks),
+	 * or as a regular JSON string for plain text (genesis block).
+	 */
+	@JsonGetter("data")
+	@JsonRawValue
+	public String getDataJson() {
+		if (data != null && (data.startsWith("[") || data.startsWith("{"))) {
+			return data;
+		}
+		// Plain string like "Genesis Block" - must still be a valid JSON value
+		return "\"" + data.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+	}
+
+	/**
+	 * Deserializes the data field from JSON: handles both plain strings (genesis)
+	 * and structured JSON arrays/objects (mined blocks from peer sync).
+	 */
+	@JsonSetter("data")
+	public void setDataJson(JsonNode node) {
+		if (node.isTextual()) {
+			this.data = node.textValue();
+		} else {
+			this.data = node.toString();
+		}
+	}
 
 	public Block(int index, LocalDateTime timestamp, String data, String previousHash) {
 		this.index = index;

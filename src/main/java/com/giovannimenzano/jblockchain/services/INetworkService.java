@@ -18,6 +18,17 @@ public interface INetworkService {
 	Set<String> getNodes();
 
 	/**
+	 * Returns the full public URL of this node (scheme + host + port + context-path).
+	 */
+	String getLocalNodeUrl();
+
+	/**
+	 * Contacts all configured seed nodes to register this node and discover known peers.
+	 * Should be called at startup before resolveConflicts().
+	 */
+	void bootstrapFromSeeds();
+
+	/**
 	 * Broadcasts a newly mined block to a subset of registered peers (gossip).
 	 * Failures per individual peer are swallowed so one unreachable node
 	 * does not prevent the rest of the network from receiving the block.

@@ -1,11 +1,13 @@
 package com.giovannimenzano.jblockchain.services.impl;
 
+import com.giovannimenzano.jblockchain.dto.request.NodeInfo;
 import com.giovannimenzano.jblockchain.dto.response.BlockchainStatus;
 import com.giovannimenzano.jblockchain.dto.response.GenericResponse;
 import com.giovannimenzano.jblockchain.entities.Block;
 import com.giovannimenzano.jblockchain.exceptions.BlockchainException;
 import com.giovannimenzano.jblockchain.services.IBlockchainService;
 import com.giovannimenzano.jblockchain.services.INetworkService;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -15,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -53,11 +56,26 @@ public class NetworkServiceImpl implements INetworkService {
 	@Value("${api.network.broadcast:/broadcast}")
 	private String broadcastEndpoint;
 
-	@Value("${server.port:8091}")
+	/**
+	 * Public base URL of this node. E.g. http://localhost or https://node1.example.com.
+	 * Combined with port and context-path to form the full self URL used in gossip broadcasts.
+	 * Must be explicitly set or the application will refuse to start if blank.
+	 */
+	@Value("${blockchain.node.url}")
+	private String nodeUrl;
+
+	@Value("${server.port}")
 	private int serverPort;
 
 	@Value("${server.servlet.context-path:}")
 	private String contextPath;
+
+	/**
+	 * Comma-separated list of seed node URLs to contact on startup for auto-registration.
+	 * Leave empty if this is the first (bootstrap) node in the network.
+	 */
+	@Value("${blockchain.network.seed-nodes:}")
+	private String seedNodesConfig;
 
 	private final Set<String> nodes = new HashSet<>();
 
@@ -76,6 +94,21 @@ public class NetworkServiceImpl implements INetworkService {
 		this.restTemplate = restTemplate;
 	}
 
+	/**
+	 * Validates that blockchain.node.url is configured.
+	 * Fails fast at startup rather than producing silent bugs at runtime.
+	 */
+	@PostConstruct
+	public void validateConfig() {
+		if (nodeUrl == null || nodeUrl.isBlank()) {
+			throw new IllegalStateException(
+				"blockchain.node.url must be set. " +
+				"Set it to the public host of this node (e.g. http://localhost or https://node1.example.com)."
+			);
+		}
+		log.info("Node identity: {}", getLocalNodeUrl());
+	}
+
 	@Override
 	public void registerNode(String url) {
 		if (url == null || url.isBlank()) {
@@ -88,6 +121,86 @@ public class NetworkServiceImpl implements INetworkService {
 	@Override
 	public Set<String> getNodes() {
 		return Collections.unmodifiableSet(nodes);
+	}
+
+	@Override
+	public String getLocalNodeUrl() {
+		return nodeUrl + ":" + serverPort + contextPath;
+	}
+
+	/**
+	 * Contacts each configured seed node to:
+	 * 1. Register this node as a peer of the seed.
+	 * 2. Discover and register all peers already known to the seed.
+	 * Errors on individual seeds are logged but do not block startup.
+	 */
+	@Override
+	@SuppressWarnings("unchecked")
+	public void bootstrapFromSeeds() {
+		if (seedNodesConfig == null || seedNodesConfig.isBlank()) {
+			log.info("[Bootstrap] No seed nodes configured - starting as standalone node.");
+			return;
+		}
+
+		List<String> seeds = Arrays.stream(seedNodesConfig.split(","))
+			.map(String::trim)
+			.filter(s -> !s.isBlank())
+			.collect(Collectors.toList());
+
+		String selfUrl = getLocalNodeUrl();
+		log.info("[Bootstrap] Contacting {} seed node(s): {}", seeds.size(), seeds);
+
+		Set<String> discoveredFromSeeds = new HashSet<>();
+
+		for (String seed : seeds) {
+			try {
+				// Step 1: register self with the seed
+				String registerUrl = seed + networkBasePath + "/nodes";
+				NodeInfo selfInfo = new NodeInfo();
+				selfInfo.setUrl(selfUrl);
+				restTemplate.postForObject(registerUrl, selfInfo, Void.class);
+				log.info("[Bootstrap] Registered self ({}) with seed {}", selfUrl, seed);
+
+				// Step 2: discover peers already known to the seed
+				String peersUrl = seed + networkBasePath + "/nodes";
+				Map<String, Object> response = restTemplate.getForObject(peersUrl, Map.class);
+				if (response != null && response.get("data") instanceof List) {
+					List<String> peerList = (List<String>) response.get("data");
+					peerList.stream()
+						.filter(p -> !p.equals(selfUrl))
+						.forEach(p -> {
+							nodes.add(p);
+							discoveredFromSeeds.add(p);
+							log.info("[Bootstrap] Discovered peer: {}", p);
+						});
+				}
+
+				// Always add the seed itself as a peer
+				nodes.add(seed);
+
+			} catch (RestClientException e) {
+				log.warn("[Bootstrap] Failed to contact seed {}: {}", seed, e.getMessage());
+			}
+		}
+
+		// Step 3: register self with every discovered peer (not just seeds)
+		// so the topology is fully symmetric, e.g. Node-2 also learns about Node-3
+		for (String peer : discoveredFromSeeds) {
+			if (seeds.contains(peer)) {
+				continue; // already registered with seeds in step 1
+			}
+			try {
+				String registerUrl = peer + networkBasePath + "/nodes";
+				NodeInfo selfInfo = new NodeInfo();
+				selfInfo.setUrl(selfUrl);
+				restTemplate.postForObject(registerUrl, selfInfo, Void.class);
+				log.info("[Bootstrap] Registered self ({}) with discovered peer {}", selfUrl, peer);
+			} catch (RestClientException e) {
+				log.warn("[Bootstrap] Failed to register with discovered peer {}: {}", peer, e.getMessage());
+			}
+		}
+
+		log.info("[Bootstrap] Bootstrap complete. Known peers: {}", nodes);
 	}
 
 	/**
@@ -240,11 +353,4 @@ public class NetworkServiceImpl implements INetworkService {
 		}
 	}
 
-	/**
-	 * Builds the local node URL from server.port and context-path.
-	 * Used as the sender identifier in gossip broadcasts.
-	 */
-	private String getLocalNodeUrl() {
-		return "http://localhost:" + serverPort + contextPath;
-	}
 }

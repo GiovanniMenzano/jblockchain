@@ -29,7 +29,9 @@ public class ChainSyncScheduler {
 		if (!syncEnabled) {
 			return;
 		}
-		log.info("[Scheduler] Node online - performing initial chain sync with peers...");
+		log.info("[Scheduler] Node online - bootstrapping from seed nodes...");
+		networkService.bootstrapFromSeeds();
+		log.info("[Scheduler] Performing initial chain sync with peers...");
 		boolean replaced = networkService.resolveConflicts();
 		if (replaced) {
 			log.info("[Scheduler] Initial sync complete - chain updated from peer.");
