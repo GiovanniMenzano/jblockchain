@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.services;
+package com.giovannimenzano.jblockchain.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.giovannimenzano.jblockchain.dto.MessageType;

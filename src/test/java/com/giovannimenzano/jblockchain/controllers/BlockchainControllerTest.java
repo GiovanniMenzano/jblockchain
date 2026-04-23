@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.controllers;
+package com.giovannimenzano.jblockchain.controllers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.giovannimenzano.jblockchain.controller.impl.BlockchainController;

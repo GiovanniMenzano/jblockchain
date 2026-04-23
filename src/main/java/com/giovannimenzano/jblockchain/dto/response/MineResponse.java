@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.dto.response;
+package com.giovannimenzano.jblockchain.dto.response;
 
 import com.giovannimenzano.jblockchain.entities.Block;
 import lombok.AllArgsConstructor;

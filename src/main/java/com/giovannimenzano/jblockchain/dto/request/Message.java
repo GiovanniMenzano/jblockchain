@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.dto.request;
+package com.giovannimenzano.jblockchain.dto.request;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.giovannimenzano.jblockchain.dto.MessageType;

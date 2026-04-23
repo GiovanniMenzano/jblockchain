@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.entities;
+package com.giovannimenzano.jblockchain.entities;
 
 import com.fasterxml.jackson.annotation.JsonGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;

@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.scheduler;
+package com.giovannimenzano.jblockchain.scheduler;
 
 import com.giovannimenzano.jblockchain.services.INetworkService;
 import lombok.RequiredArgsConstructor;

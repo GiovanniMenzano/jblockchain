@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.dto.request;
+package com.giovannimenzano.jblockchain.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;

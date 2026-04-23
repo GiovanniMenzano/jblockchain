@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.controller.impl;
+package com.giovannimenzano.jblockchain.controller.impl;
 
 import com.giovannimenzano.jblockchain.controller.IBlockchainController;
 import com.giovannimenzano.jblockchain.dto.request.Message;

@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.interceptor;
+package com.giovannimenzano.jblockchain.interceptor;
 
 import com.giovannimenzano.jblockchain.dto.response.GenericResponse;
 import com.giovannimenzano.jblockchain.exceptions.BlockchainException;

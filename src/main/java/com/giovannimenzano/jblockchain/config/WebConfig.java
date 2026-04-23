@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.config;
+package com.giovannimenzano.jblockchain.config;
 
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;

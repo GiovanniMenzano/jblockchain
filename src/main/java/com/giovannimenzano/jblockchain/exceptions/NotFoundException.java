@@ -1,4 +1,4 @@
-﻿package com.giovannimenzano.jblockchain.exceptions;
+package com.giovannimenzano.jblockchain.exceptions;
 
 import java.io.Serial;
 
