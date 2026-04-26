@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -77,6 +78,12 @@ public class NetworkServiceImpl implements INetworkService {
 	@Value("${blockchain.network.seed-nodes:}")
 	private String seedNodesConfig;
 
+	/**
+	 * Maximum consecutive failures before a peer is automatically removed.
+	 */
+	@Value("${blockchain.network.max-failures:3}")
+	private int maxConsecutiveFailures;
+
 	private final Set<String> nodes = new HashSet<>();
 
 	/**
@@ -84,6 +91,11 @@ public class NetworkServiceImpl implements INetworkService {
 	 * Prevents the same block from being re-broadcast indefinitely in a mesh network.
 	 */
 	private final Set<String> seenBlockHashes = Collections.synchronizedSet(new HashSet<>());
+
+	/**
+	 * Tracks consecutive failure counts per peer for passive eviction.
+	 */
+	private final Map<String, Integer> failureCounts = new ConcurrentHashMap<>();
 
 	private final IBlockchainService blockchainService;
 	private final RestTemplate restTemplate;
@@ -128,6 +140,30 @@ public class NetworkServiceImpl implements INetworkService {
 	@Override
 	public String getLocalNodeUrl() {
 		return nodeUrl + ":" + serverPort + contextPath;
+	}
+
+	@Override
+	public void removeNode(String url) {
+		if (url != null && nodes.remove(url.trim())) {
+			failureCounts.remove(url.trim());
+			log.info("Peer removed: {}. Remaining peers: {}", url.trim(), nodes.size());
+		}
+	}
+
+	@Override
+	public void recordPeerFailure(String url) {
+		int count = failureCounts.merge(url, 1, Integer::sum);
+		if (count >= maxConsecutiveFailures) {
+			log.warn("Peer {} unreachable after {} consecutive failures — evicting.", url, count);
+			removeNode(url);
+		} else {
+			log.debug("Peer {} failure {}/{}", url, count, maxConsecutiveFailures);
+		}
+	}
+
+	@Override
+	public void recordPeerSuccess(String url) {
+		failureCounts.remove(url);
 	}
 
 	/**
@@ -285,15 +321,17 @@ public class NetworkServiceImpl implements INetworkService {
 		String bestPeerUrl = null;
 		int bestLength = blockchainService.getChain().size();
 
-		for (String nodeUrl : nodes) {
+		for (String nodeUrl : new HashSet<>(nodes)) {
 			try {
 				BlockchainStatus peerStatus = getPeerStatus(nodeUrl);
 				if (peerStatus != null && peerStatus.getChainLength() > bestLength) {
 					bestLength = peerStatus.getChainLength();
 					bestPeerUrl = nodeUrl;
 				}
+				recordPeerSuccess(nodeUrl);
 			} catch (RestClientException e) {
 				log.warn("Failed to fetch status from {}: {}", nodeUrl, e.getMessage());
+				recordPeerFailure(nodeUrl);
 			}
 		}
 
@@ -349,9 +387,11 @@ public class NetworkServiceImpl implements INetworkService {
 				url += "?sender=" + senderUrl;
 			}
 			restTemplate.postForObject(url, block, Void.class);
+			recordPeerSuccess(targetUrl);
 			log.info("Block {} broadcast to {}", block.getIndex(), targetUrl);
 		} catch (RestClientException e) {
 			log.warn("Failed to broadcast block {} to {}: {}", block.getIndex(), targetUrl, e.getMessage());
+			recordPeerFailure(targetUrl);
 		}
 	}
 

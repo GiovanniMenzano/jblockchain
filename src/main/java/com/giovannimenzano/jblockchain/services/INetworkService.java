@@ -54,4 +54,20 @@ public interface INetworkService {
 	 * Fetches chain status from a peer node without downloading the full chain.
 	 */
 	BlockchainStatus getPeerStatus(String peerUrl);
+
+	/**
+	 * Removes a peer from the known nodes set.
+	 */
+	void removeNode(String url);
+
+	/**
+	 * Records a communication failure for a peer.
+	 * After a threshold of consecutive failures, the peer is automatically removed.
+	 */
+	void recordPeerFailure(String url);
+
+	/**
+	 * Records a successful communication with a peer, resetting its failure counter.
+	 */
+	void recordPeerSuccess(String url);
 }

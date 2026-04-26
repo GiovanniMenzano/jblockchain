@@ -7,6 +7,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +26,9 @@ import java.util.concurrent.Executors;
  * On startup, the node broadcasts its public URL to a well-known UDP port.
  * A background listener picks up broadcasts from other nodes and registers
  * them as peers via {@link INetworkService#registerNode(String)}.
+ *
+ * A periodic re-broadcast runs every {@code blockchain.network.discovery.interval} ms
+ * (default: 60 seconds) to allow evicted or restarted nodes to rejoin the network.
  *
  * This eliminates the need to manually configure seed nodes for LAN deployments.
  */
@@ -64,6 +68,19 @@ public class UdpDiscoveryService implements IDiscoveryService {
 	}
 
 	/**
+	 * Periodic re-broadcast so that evicted or restarted nodes can rejoin the network.
+	 * Interval configurable via blockchain.network.discovery.interval (default: 60s).
+	 */
+	@Scheduled(fixedRateString = "${blockchain.network.discovery.interval:60000}")
+	public void periodicBroadcast() {
+		if (!discoveryEnabled || !running) {
+			return;
+		}
+		log.debug("[Discovery] Periodic re-broadcast...");
+		broadcastPresence();
+	}
+
+	/**
 	 * Sends a UDP broadcast packet containing this node's URL to all hosts on the local network.
 	 * Format: "JBLOCKCHAIN:<full-node-url>"
 	 */
@@ -81,7 +98,7 @@ public class UdpDiscoveryService implements IDiscoveryService {
 				discoveryPort
 			);
 			socket.send(packet);
-			log.info("[Discovery] Broadcasted presence: {}", selfUrl);
+			log.debug("[Discovery] Broadcasted presence: {}", selfUrl);
 		} catch (IOException e) {
 			log.warn("[Discovery] Failed to broadcast presence: {}", e.getMessage());
 		}
