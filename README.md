@@ -8,6 +8,7 @@ A demo blockchain built with Java and Spring Boot, designed for learning purpose
 - **SHA-256** block hashing and chain integrity validation
 - **Generic message payload**: store text, JSON, or Base64-encoded binary data in blocks
 - **P2P networking**: register peer nodes, broadcast mined blocks, and run the Nakamoto consensus algorithm to resolve chain conflicts
+- **UDP auto-discovery**: nodes on the same LAN find each other automatically — zero configuration needed
 - **REST API** with full Swagger UI
 - **In-memory chain** (no database needed to run)
 
@@ -43,6 +44,7 @@ src/main/java/com/giovannimenzano/jblockchain/
 │                   INetworkService
 │   impl/           BlockchainServiceImpl        (PoW, validation, consensus)
 │                   NetworkServiceImpl           (P2P gossip, bootstrap, broadcast)
+│                   UdpDiscoveryService          (LAN auto-discovery via UDP broadcast)
 ```
 
 ## Getting Started
@@ -64,36 +66,49 @@ Swagger UI: **http://localhost:8091/jblockchain/swagger-ui/index.html**
 
 ### Run N nodes (P2P network)
 
-Each node is started in a separate PowerShell terminal. The **first node** is the seed and has no peers. Every subsequent node points to the seed via `blockchain.network.seed-nodes` and is automatically registered, no manual setup needed.
+Nodes can discover each other in two ways:
 
-**General pattern:**
+| Mode | How it works | Best for |
+|---|---|---|
+| **Auto-discovery (default)** | UDP broadcast on the LAN — nodes find each other automatically | Local development, same machine or LAN |
+| **Manual seed-nodes** | Each node points to a known seed URL at startup | Remote servers, cross-network deployments |
 
-```powershell
-# First node (seed) - no seed-nodes argument needed
-mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=<PORT> --blockchain.node.name=<NAME>"
+Both modes can coexist: auto-discovery runs in background while seed-nodes bootstrap handles the initial connection.
 
-# Every additional node - points to node-1 as seed
-mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=<PORT> --blockchain.node.name=<NAME> --blockchain.network.seed-nodes=http://localhost:<SEED_PORT>/jblockchain"
-```
+#### Option A — Auto-discovery (zero config)
 
-**Example with 3 nodes** (open three terminals in the project root):
+UDP discovery is **enabled by default**. Just start each node on a different port — they will find each other automatically.
 
-*Terminal 1 — node-1 (seed):*
+*Terminal 1:*
 ```powershell
 mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8091 --blockchain.node.name=node-1"
 ```
 
-*Terminal 2 — node-2:*
+*Terminal 2:*
 ```powershell
-mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8092 --blockchain.node.name=node-2 --blockchain.network.seed-nodes=http://localhost:8091/jblockchain"
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8092 --blockchain.node.name=node-2"
 ```
 
-*Terminal 3 — node-3:*
+*Terminal 3:*
 ```powershell
-mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8093 --blockchain.node.name=node-3 --blockchain.network.seed-nodes=http://localhost:8091/jblockchain"
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8093 --blockchain.node.name=node-3"
 ```
 
-> Always start **node-1 first** and wait for it to be ready before starting the others.
+> No need to specify seed-nodes. Nodes broadcast their presence via UDP port `8888` and register each other automatically.
+
+#### Option B — Manual seed-nodes
+
+For remote deployments or when UDP broadcast is not available, disable auto-discovery and point each node to a seed:
+
+```powershell
+# First node (seed) - no seed-nodes needed
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8091 --blockchain.node.name=node-1 --blockchain.network.discovery.enabled=false"
+
+# Additional nodes - point to the seed
+mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8092 --blockchain.node.name=node-2 --blockchain.network.discovery.enabled=false --blockchain.network.seed-nodes=http://localhost:8091/jblockchain"
+```
+
+> Always start the **seed node first** and wait for it to be ready before starting the others.
 > Each additional node will self-register with the seed and discover all other peers automatically at startup.
 
 ### Configuration
@@ -120,6 +135,12 @@ blockchain.node.url=http://localhost
 # Comma-separated seed node URLs for auto-registration at startup.
 # Leave empty for the first (bootstrap) node in the network.
 blockchain.network.seed-nodes=
+
+# UDP auto-discovery (LAN only)
+# Nodes broadcast their presence and find each other automatically.
+# Disable if using seed-nodes on a remote network instead.
+blockchain.network.discovery.enabled=true
+blockchain.network.discovery.port=8888
 ```
 
 ## API Reference
@@ -173,9 +194,9 @@ Supported types: `TEXT`, `JSON`, `BINARY` (Base64-encoded).
    - node-2: `http://localhost:8092/jblockchain/swagger-ui/index.html`
    - node-3: `http://localhost:8093/jblockchain/swagger-ui/index.html`
 
-### Phase 1 — Verify automatic bootstrap
+### Phase 1 — Verify automatic discovery
 
-Check the logs of node-2 and node-3: both should show `[Bootstrap] Registered self` and `Bootstrap complete` before the first sync. No manual registration is needed.
+Check the logs: each node should show `[Discovery] Broadcasted presence` and `[Discovery] Listening for peers on UDP port 8888`. If using seed-nodes instead, logs will show `[Bootstrap] Registered self` and `Bootstrap complete`.
 
 On node-1's Swagger, call `GET /api/network/nodes` — it should already list node-2 and node-3.
 

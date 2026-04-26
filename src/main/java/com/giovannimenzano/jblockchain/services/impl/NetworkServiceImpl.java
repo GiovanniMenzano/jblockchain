@@ -114,8 +114,10 @@ public class NetworkServiceImpl implements INetworkService {
 		if (url == null || url.isBlank()) {
 			throw new BlockchainException("Node URL cannot be empty");
 		}
-		nodes.add(url.trim());
-		log.info("Node registered: {}. Total peers: {}", url.trim(), nodes.size());
+		String trimmed = url.trim();
+		if (nodes.add(trimmed)) {
+			log.info("Peer registered: {}. Total peers: {}", trimmed, nodes.size());
+		}
 	}
 
 	@Override
@@ -212,7 +214,7 @@ public class NetworkServiceImpl implements INetworkService {
 	@Override
 	public void broadcastBlock(Block block) {
 		if (nodes.isEmpty()) {
-			log.info("No peer nodes registered. Skipping broadcast.");
+			log.debug("No peers registered, skipping broadcast.");
 			return;
 		}
 
@@ -296,7 +298,7 @@ public class NetworkServiceImpl implements INetworkService {
 		}
 
 		if (bestPeerUrl == null) {
-			log.info("Consensus: current chain is already the longest (length={}).", blockchainService.getChain().size());
+			log.debug("Consensus: local chain is longest (length={})", blockchainService.getChain().size());
 			return false;
 		}
 

@@ -29,7 +29,6 @@ public class NetworkController implements INetworkController {
 
 	@Override
 	public ResponseEntity<GenericResponse<Integer>> registerNode(@Valid @RequestBody NodeInfo nodeInfo) {
-		log.info("Request to register peer node: {}", nodeInfo.getUrl());
 		networkService.registerNode(nodeInfo.getUrl());
 		int total = networkService.getNodes().size();
 		return ResponseEntity.ok(GenericResponse.success("Node registered successfully", total));
