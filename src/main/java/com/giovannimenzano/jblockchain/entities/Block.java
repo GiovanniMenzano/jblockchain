@@ -7,15 +7,14 @@ import com.fasterxml.jackson.annotation.JsonSetter;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
-@Slf4j
 public class Block {
 
 	private int index;
@@ -40,7 +39,10 @@ public class Block {
 	@JsonGetter("data")
 	@JsonRawValue
 	public String getDataJson() {
-		if (data != null && (data.startsWith("[") || data.startsWith("{"))) {
+		if (data == null) {
+			return "null";
+		}
+		if (data.startsWith("[") || data.startsWith("{")) {
 			return data;
 		}
 		// Plain string like "Genesis Block" - must still be a valid JSON value
@@ -81,7 +83,6 @@ public class Block {
 			nonce++;
 			hash = calculateHash();
 		}
-		log.info("Block mined at index {}: {} (nonce={})", index, hash, nonce);
 		return hash;
 	}
 
@@ -94,7 +95,7 @@ public class Block {
 		String dataToHash = index + timestamp.toString() + data + previousHash + nonce;
 		try {
 			MessageDigest md = MessageDigest.getInstance("SHA-256");
-			byte[] bytes = md.digest(dataToHash.getBytes());
+			byte[] bytes = md.digest(dataToHash.getBytes(StandardCharsets.UTF_8));
 			StringBuilder buffer = new StringBuilder();
 			for (byte b : bytes) {
 				buffer.append(String.format("%02x", b));
@@ -102,7 +103,6 @@ public class Block {
 			return buffer.toString();
 		} catch (NoSuchAlgorithmException e) {
 			// SHA-256 is guaranteed by the JVM spec; this branch is unreachable in practice
-			log.error("SHA-256 algorithm not found", e);
 			throw new RuntimeException("SHA-256 not available", e);
 		}
 	}

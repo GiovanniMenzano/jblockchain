@@ -30,6 +30,12 @@ public class BlockchainServiceImpl implements IBlockchainService {
 	private final List<Message> pendingMessages = new ArrayList<>();
 	private final ObjectMapper objectMapper;
 
+	/**
+	 * Cached chain validity flag. Invalidated on mineBlock() and replaceChain().
+	 * Avoids O(n) full chain walk on every getStatus() call.
+	 */
+	private volatile Boolean chainValidCache = null;
+
 	public BlockchainServiceImpl(ObjectMapper objectMapper) {
 		this.objectMapper = objectMapper;
 	}
@@ -41,14 +47,19 @@ public class BlockchainServiceImpl implements IBlockchainService {
 		log.info("Initializing blockchain with genesis block (difficulty={})", miningDifficulty);
 		Block genesis = new Block(0, GENESIS_TIMESTAMP, "Genesis Block", "0");
 		genesis.mine(miningDifficulty);
-		chain.add(genesis);
+		synchronized (chain) {
+			chain.add(genesis);
+		}
+		chainValidCache = true;
 		log.info("Genesis block created: {}", genesis.getHash());
 	}
 
 	@Override
 	public void addMessage(Message message) {
-		pendingMessages.add(message);
-		log.info("Message added to pending pool. Total pending: {}", pendingMessages.size());
+		synchronized (pendingMessages) {
+			pendingMessages.add(message);
+			log.info("Message added to pending pool. Total pending: {}", pendingMessages.size());
+		}
 	}
 
 	/**
@@ -57,28 +68,42 @@ public class BlockchainServiceImpl implements IBlockchainService {
 	 */
 	@Override
 	public MineResponse mineBlock() {
-		if (pendingMessages.isEmpty()) {
-			throw new BlockchainException("No pending messages to mine. Submit at least one message first.");
-		}
-
 		String data;
-		try {
-			data = objectMapper.writeValueAsString(pendingMessages);
-		} catch (JsonProcessingException e) {
-			throw new BlockchainException("Failed to serialize pending messages: " + e.getMessage(), e);
+		int pendingCount;
+
+		synchronized (pendingMessages) {
+			if (pendingMessages.isEmpty()) {
+				throw new BlockchainException("No pending messages to mine. Submit at least one message first.");
+			}
+			try {
+				data = objectMapper.writeValueAsString(pendingMessages);
+			} catch (JsonProcessingException e) {
+				throw new BlockchainException("Failed to serialize pending messages: " + e.getMessage(), e);
+			}
+			pendingCount = pendingMessages.size();
 		}
 
-		Block newBlock = new Block(chain.size(), LocalDateTime.now(), data, getLastBlock().getHash());
-		int pendingCount = pendingMessages.size();
+		Block newBlock;
+		synchronized (chain) {
+			newBlock = new Block(chain.size(), LocalDateTime.now(), data, getLastBlockInternal().getHash());
+		}
+
 		log.info("Mining block {} with {} messages (difficulty={})...", newBlock.getIndex(), pendingCount, miningDifficulty);
-
 		newBlock.mine(miningDifficulty);
+		log.info("Block {} mined: {} (nonce={})", newBlock.getIndex(), newBlock.getHash(), newBlock.getNonce());
 
-		chain.add(newBlock);
-		pendingMessages.clear();
+		int chainLength;
+		synchronized (chain) {
+			chain.add(newBlock);
+			chainLength = chain.size();
+		}
+		synchronized (pendingMessages) {
+			pendingMessages.clear();
+		}
 
-		log.info("Block {} mined successfully. Hash: {}", newBlock.getIndex(), newBlock.getHash());
-		return new MineResponse("Block mined successfully", newBlock, chain.size());
+		chainValidCache = null; // invalidate cache
+		log.info("Block {} added to chain. Chain length: {}", newBlock.getIndex(), chainLength);
+		return new MineResponse("Block mined successfully", newBlock, chainLength);
 	}
 
 	/**
@@ -92,29 +117,31 @@ public class BlockchainServiceImpl implements IBlockchainService {
 	public boolean isChainValid() {
 		String target = "0".repeat(miningDifficulty);
 
-		Block genesis = chain.get(0);
-		if (!genesis.getHash().equals(genesis.calculateHash())) {
-			log.warn("Genesis block has invalid hash - chain is corrupted");
-			return false;
-		}
-
-		for (int i = 1; i < chain.size(); i++) {
-			Block current = chain.get(i);
-			Block previous = chain.get(i - 1);
-
-			if (!current.getHash().equals(current.calculateHash())) {
-				log.warn("Block {} has invalid hash - data may have been tampered with", i);
+		synchronized (chain) {
+			Block genesis = chain.get(0);
+			if (!genesis.getHash().equals(genesis.calculateHash())) {
+				log.warn("Genesis block has invalid hash - chain is corrupted");
 				return false;
 			}
 
-			if (!current.getPreviousHash().equals(previous.getHash())) {
-				log.warn("Block {} has broken chain linkage", i);
-				return false;
-			}
+			for (int i = 1; i < chain.size(); i++) {
+				Block current = chain.get(i);
+				Block previous = chain.get(i - 1);
 
-			if (!current.getHash().startsWith(target)) {
-				log.warn("Block {} does not satisfy the difficulty requirement", i);
-				return false;
+				if (!current.getHash().equals(current.calculateHash())) {
+					log.warn("Block {} has invalid hash - data may have been tampered with", i);
+					return false;
+				}
+
+				if (!current.getPreviousHash().equals(previous.getHash())) {
+					log.warn("Block {} has broken chain linkage", i);
+					return false;
+				}
+
+				if (!current.getHash().startsWith(target)) {
+					log.warn("Block {} does not satisfy the difficulty requirement", i);
+					return false;
+				}
 			}
 		}
 		return true;
@@ -126,65 +153,97 @@ public class BlockchainServiceImpl implements IBlockchainService {
 	 */
 	@Override
 	public boolean replaceChain(List<Block> newChain) {
-		if (newChain == null || newChain.size() <= chain.size()) {
-			log.info("Incoming chain is not longer than current chain (current={}, incoming={}). Keeping current.",
-					chain.size(), newChain == null ? 0 : newChain.size());
-			return false;
+		synchronized (chain) {
+			if (newChain == null || newChain.size() <= chain.size()) {
+				log.info("Incoming chain is not longer than current chain (current={}, incoming={}). Keeping current.",
+						chain.size(), newChain == null ? 0 : newChain.size());
+				return false;
+			}
+
+			String target = "0".repeat(miningDifficulty);
+
+			Block incomingGenesis = newChain.get(0);
+			if (!incomingGenesis.getHash().equals(incomingGenesis.calculateHash())) {
+				log.warn("Incoming chain has invalid genesis block - rejected");
+				return false;
+			}
+
+			for (int i = 1; i < newChain.size(); i++) {
+				Block current = newChain.get(i);
+				Block previous = newChain.get(i - 1);
+
+				if (!current.getHash().equals(current.calculateHash())) return false;
+				if (!current.getPreviousHash().equals(previous.getHash())) return false;
+				if (!current.getHash().startsWith(target)) return false;
+			}
+
+			log.info("Replacing current chain (length={}) with incoming chain (length={})", chain.size(), newChain.size());
+			chain.clear();
+			chain.addAll(newChain);
 		}
 
-		String target = "0".repeat(miningDifficulty);
-
-		Block incomingGenesis = newChain.get(0);
-		if (!incomingGenesis.getHash().equals(incomingGenesis.calculateHash())) {
-			log.warn("Incoming chain has invalid genesis block - rejected");
-			return false;
-		}
-
-		for (int i = 1; i < newChain.size(); i++) {
-			Block current = newChain.get(i);
-			Block previous = newChain.get(i - 1);
-
-			if (!current.getHash().equals(current.calculateHash())) return false;
-			if (!current.getPreviousHash().equals(previous.getHash())) return false;
-			if (!current.getHash().startsWith(target)) return false;
-		}
-
-		log.info("Replacing current chain (length={}) with incoming chain (length={})", chain.size(), newChain.size());
-		chain.clear();
-		chain.addAll(newChain);
+		chainValidCache = null; // invalidate cache
 		return true;
 	}
 
 	@Override
 	public BlockchainStatus getStatus() {
-		return new BlockchainStatus(chain.size(), isChainValid(), getLastBlock().getHash(), pendingMessages.size());
+		Boolean cached = chainValidCache;
+		boolean valid = (cached != null) ? cached : isChainValid();
+		if (cached == null) {
+			chainValidCache = valid;
+		}
+		synchronized (chain) {
+			return new BlockchainStatus(chain.size(), valid, getLastBlockInternal().getHash(), getPendingCount());
+		}
 	}
 
 	@Override
 	public List<Block> getChain() {
-		return Collections.unmodifiableList(chain);
+		synchronized (chain) {
+			return Collections.unmodifiableList(new ArrayList<>(chain));
+		}
 	}
 
 	@Override
 	public Block getLastBlock() {
-		return chain.get(chain.size() - 1);
+		synchronized (chain) {
+			return getLastBlockInternal();
+		}
 	}
 
 	@Override
 	public List<Message> getPendingMessages() {
-		return Collections.unmodifiableList(pendingMessages);
+		synchronized (pendingMessages) {
+			return Collections.unmodifiableList(new ArrayList<>(pendingMessages));
+		}
 	}
 
 	@Override
 	public Block getBlockByIndex(int index) {
-		if (index < 0 || index >= chain.size()) {
-			throw new NotFoundException("Block with index " + index + " not found. Chain length: " + chain.size());
+		synchronized (chain) {
+			if (index < 0 || index >= chain.size()) {
+				throw new NotFoundException("Block with index " + index + " not found. Chain length: " + chain.size());
+			}
+			return chain.get(index);
 		}
-		return chain.get(index);
 	}
 
 	@Override
 	public int getMiningDifficulty() {
 		return miningDifficulty;
+	}
+
+	/**
+	 * Internal helper - must be called inside synchronized(chain).
+	 */
+	private Block getLastBlockInternal() {
+		return chain.get(chain.size() - 1);
+	}
+
+	private int getPendingCount() {
+		synchronized (pendingMessages) {
+			return pendingMessages.size();
+		}
 	}
 }

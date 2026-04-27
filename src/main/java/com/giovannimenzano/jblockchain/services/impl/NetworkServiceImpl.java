@@ -20,6 +20,7 @@ import org.springframework.web.client.RestTemplate;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -84,13 +85,23 @@ public class NetworkServiceImpl implements INetworkService {
 	@Value("${blockchain.network.max-failures:3}")
 	private int maxConsecutiveFailures;
 
-	private final Set<String> nodes = new HashSet<>();
+	private final Set<String> nodes = Collections.synchronizedSet(new HashSet<>());
 
 	/**
-	 * Anti-loop set: stores hashes of blocks already received via broadcast.
-	 * Prevents the same block from being re-broadcast indefinitely in a mesh network.
+	 * Anti-loop set: stores hashes of recently seen broadcast blocks.
+	 * Used only for frontier dedup (blocks at chain tip). Bounded to MAX_SEEN_HASHES
+	 * entries with LRU eviction to prevent unbounded memory growth.
+	 * Most duplicates are filtered by the chain-aware check before reaching this Set.
 	 */
-	private final Set<String> seenBlockHashes = Collections.synchronizedSet(new HashSet<>());
+	private static final int MAX_SEEN_HASHES = 100;
+	private final Set<String> seenBlockHashes = Collections.newSetFromMap(
+		Collections.synchronizedMap(new LinkedHashMap<>(MAX_SEEN_HASHES + 1, 0.75f, false) {
+			@Override
+			protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+				return size() > MAX_SEEN_HASHES;
+			}
+		})
+	);
 
 	/**
 	 * Tracks consecutive failure counts per peer for passive eviction.
@@ -154,7 +165,7 @@ public class NetworkServiceImpl implements INetworkService {
 	public void recordPeerFailure(String url) {
 		int count = failureCounts.merge(url, 1, Integer::sum);
 		if (count >= maxConsecutiveFailures) {
-			log.warn("Peer {} unreachable after {} consecutive failures — evicting.", url, count);
+			log.warn("Peer {} unreachable after {} consecutive failures - evicting.", url, count);
 			removeNode(url);
 		} else {
 			log.debug("Peer {} failure {}/{}", url, count, maxConsecutiveFailures);
@@ -256,20 +267,31 @@ public class NetworkServiceImpl implements INetworkService {
 
 		String selfUrl = getLocalNodeUrl();
 		seenBlockHashes.add(block.getHash());
-		Set<String> targets = selectBroadcastTargets(nodes, selfUrl);
+		Set<String> targets = selectBroadcastTargets(new HashSet<>(nodes), selfUrl);
 		log.info("Broadcasting block {} to {}/{} peers", block.getIndex(), targets.size(), nodes.size());
 
 		targets.forEach(nodeUrl -> sendBroadcast(block, nodeUrl, selfUrl));
 	}
 
 	/**
-	 * Receives a block broadcast from a peer. Ignores already-seen blocks (anti-loop).
-	 * If the block is new, triggers a consensus round and re-broadcasts to local peers.
+	 * Receives a block broadcast from a peer.
+	 * Uses a two-tier dedup strategy:
+	 * 1. Chain-aware: blocks with index below local chain height are already known - skip immediately.
+	 * 2. Frontier dedup: for blocks at/above chain tip, uses seenBlockHashes Set to prevent re-broadcast loops.
+	 * If the block is genuinely new, triggers a consensus round and re-broadcasts to local peers.
 	 */
 	@Override
 	public void receiveBroadcast(Block block, String senderUrl) {
+		// Tier 1: chain-aware check - block already behind our chain, no need to process
+		int localChainSize = blockchainService.getChain().size();
+		if (block.getIndex() < localChainSize) {
+			log.debug("Block {} already behind chain (chain size={}), skipping broadcast", block.getIndex(), localChainSize);
+			return;
+		}
+
+		// Tier 2: frontier dedup - prevent re-broadcast loops for same-height blocks
 		if (seenBlockHashes.contains(block.getHash())) {
-			log.debug("Block {} already seen - ignoring duplicate broadcast", block.getHash());
+			log.debug("Block {} already seen at frontier - ignoring duplicate broadcast", block.getHash());
 			return;
 		}
 
@@ -278,7 +300,7 @@ public class NetworkServiceImpl implements INetworkService {
 
 		resolveConflicts();
 
-		Set<String> targets = selectBroadcastTargets(nodes, senderUrl);
+		Set<String> targets = selectBroadcastTargets(new HashSet<>(nodes), senderUrl);
 		if (!targets.isEmpty()) {
 			log.info("Re-broadcasting block {} to {}/{} peers", block.getIndex(), targets.size(), nodes.size());
 			targets.forEach(nodeUrl -> sendBroadcast(block, nodeUrl, senderUrl));

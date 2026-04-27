@@ -8,7 +8,7 @@ A demo blockchain built with Java and Spring Boot, designed for learning purpose
 - **SHA-256** block hashing and chain integrity validation
 - **Generic message payload**: store text, JSON, or Base64-encoded binary data in blocks
 - **P2P networking**: register peer nodes, broadcast mined blocks, and run the Nakamoto consensus algorithm to resolve chain conflicts
-- **UDP auto-discovery**: nodes on the same LAN find each other automatically — zero configuration needed
+- **UDP auto-discovery**: nodes on the same LAN find each other automatically - zero configuration needed
 - **REST API** with full Swagger UI
 - **In-memory chain** (no database needed to run)
 
@@ -70,14 +70,14 @@ Nodes can discover each other in two ways:
 
 | Mode | How it works | Best for |
 |---|---|---|
-| **Auto-discovery (default)** | UDP broadcast on the LAN — nodes find each other automatically | Local development, same machine or LAN |
+| **Auto-discovery (default)** | UDP broadcast on the LAN - nodes find each other automatically | Local development, same machine or LAN |
 | **Manual seed-nodes** | Each node points to a known seed URL at startup | Remote servers, cross-network deployments |
 
 Both modes can coexist: auto-discovery runs in background while seed-nodes bootstrap handles the initial connection.
 
-#### Option A — Auto-discovery (zero config)
+#### Option A - Auto-discovery (zero config)
 
-UDP discovery is **enabled by default**. Just start each node on a different port — they will find each other automatically.
+UDP discovery is **enabled by default**. Just start each node on a different port - they will find each other automatically.
 
 *Terminal 1:*
 ```powershell
@@ -96,7 +96,7 @@ mvn spring-boot:run "-Dspring-boot.run.arguments=--server.port=8093 --blockchain
 
 > No need to specify seed-nodes. Nodes broadcast their presence via UDP port `8888` and register each other automatically.
 
-#### Option B — Manual seed-nodes
+#### Option B - Manual seed-nodes
 
 For remote deployments or when UDP broadcast is not available, disable auto-discovery and point each node to a seed:
 
@@ -194,13 +194,13 @@ Supported types: `TEXT`, `JSON`, `BINARY` (Base64-encoded).
    - node-2: `http://localhost:8092/jblockchain/swagger-ui/index.html`
    - node-3: `http://localhost:8093/jblockchain/swagger-ui/index.html`
 
-### Phase 1 — Verify automatic discovery
+### Phase 1 - Verify automatic discovery
 
 Check the logs: each node should show `[Discovery] Broadcasted presence` and `[Discovery] Listening for peers on UDP port 8888`. If using seed-nodes instead, logs will show `[Bootstrap] Registered self` and `Bootstrap complete`.
 
-On node-1's Swagger, call `GET /api/network/nodes` — it should already list node-2 and node-3.
+On node-1's Swagger, call `GET /api/network/nodes` - it should already list node-2 and node-3.
 
-### Phase 2 — Gossip broadcast
+### Phase 2 - Gossip broadcast
 
 1. On **node-1** call `POST /api/chain/messages` with any payload:
    ```json
@@ -208,15 +208,15 @@ On node-1's Swagger, call `GET /api/network/nodes` — it should already list no
    ```
 2. On **node-1** call `POST /api/chain/mine`.
 3. Check the logs: node-2 and node-3 should receive the broadcast and synchronize automatically.
-4. Verify with `GET /api/chain` on any node — all three should show 2 blocks.
+4. Verify with `GET /api/chain` on any node - all three should show 2 blocks.
 
-### Phase 3 — Offline recovery
+### Phase 3 - Offline recovery
 
 1. Stop node-3 (`Ctrl+C` in Terminal 3).
 2. Mine one or two more blocks on node-1.
 3. Restart node-3 with the same command.
 4. Check its log: it will bootstrap, discover peers, and pull the missing blocks automatically.
-5. Verify with `GET /api/chain` on node-3 — the chain will be up to date.
+5. Verify with `GET /api/chain` on node-3 - the chain will be up to date.
 
 ## How It Works
 
